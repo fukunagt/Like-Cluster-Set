@@ -103,11 +103,16 @@ Write-Debug $groups.Length
 for ($i = 0; $i -lt $groups.Length; $i++)
 {
     Write-Debug $groups[$i]
-    
+
+    # running
+    # 0: Offline
+    # 1: Online
+    $running = 0
+
     # Get the group status from my API server.
     $user = $clusters[$clusterid][$serverid][3]
     $pass = $clusters[$clusterid][$serverid][4]
-    $uri = "http://" + $clusters[$clusterid][$serverid][1] + ":" + $clusters[$clusterid][$serverid][2] + "/api/v1/groups/failover1"
+    $uri = "http://" + $clusters[$clusterid][$serverid][1] + ":" + $clusters[$clusterid][$serverid][2] + "/api/v1/groups/" + $groups[$i]
     Write-Output $user
     Write-Debug $pass
     Write-Output $uri
@@ -119,48 +124,71 @@ for ($i = 0; $i -lt $groups.Length; $i++)
         $group = $groups[$i]
         $current = $ret.groups.current
         Write-Output "$group is running on $current."
-        break;
+        $running = 1
     }
     # FIXME
     # - I need to consider the other status (pending, failure)
 
     # Get the group status from API server on the other clusters.
-    for ($j = 0; $j -lt $clusters.Length; $j++)
+    if ($running -eq 0)
     {
-        if ($j -eq $clusterid)
+        for ($j = 0; $j -lt $clusters.Length; $j++)
         {
-            # Do nothing
-        }
-        else
-        {
-            for ($k = 0; $k -lt $clusters[$k].Length; $k++)
+            if ($j -eq $clusterid)
             {
-                Write-Output $clusters[$j][$k][0]
-                $user = $clusters[$j][$k][3]
-                $pass = $clusters[$j][$k][4]
-                $uri = "http://" + $clusters[$j][$k][1] + ":" + $clusters[$j][$k][2] + "/api/v1/groups/failover1"
-                Write-Output $user
-                Write-Debug $pass
-                Write-Output $uri
-                $base64AuthInfo = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(("{0}:{1}" -f $user,$pass)))
-                $ret = Invoke-RestMethod -Method Get -Headers @{Authorization=("Basic {0}" -f $base64AuthInfo)} -Uri $uri
-                Write-Output $ret.groups.status
-                if ($ret.groups.status -eq "Online")
-                {
-                    $group = $groups[$i]
-                    $current = $ret.groups.current
-                    Write-Output "$group is running on $current."
-                    break;
-                }
+                # Do nothing
             }
-            # FIXME
-            # - Need to consider the other status (pending, failure)
-        }        
+            else
+            {
+                for ($k = 0; $k -lt $clusters[$k].Length; $k++)
+                {
+                    Write-Output $clusters[$j][$k][0]
+                    $user = $clusters[$j][$k][3]
+                    $pass = $clusters[$j][$k][4]
+                    $uri = "http://" + $clusters[$j][$k][1] + ":" + $clusters[$j][$k][2] + "/api/v1/groups/" + $groups[$i]
+                    Write-Output $user
+                    Write-Debug $pass
+                    Write-Output $uri
+                    $base64AuthInfo = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(("{0}:{1}" -f $user,$pass)))
+                    $ret = Invoke-RestMethod -Method Get -Headers @{Authorization=("Basic {0}" -f $base64AuthInfo)} -Uri $uri
+                    Write-Output $ret
+                    Write-Output $ret.groups.status
+                    if ($ret.groups.status -eq "Online")
+                    {
+                        $group = $groups[$i]
+                        $current = $ret.groups.current
+                        Write-Output "$group is running on $current."
+                        $running = 1
+                        break;
+                    }
+                }
+                # FIXME
+                # - Need to consider the other status (pending, failure)
+            }        
+        }
+        # FIXME
+        # - Need to add some log? 
+        #   - e.g., failover1 is not running on any server.
     }
-    # FIXME
-    # - Need to add some log? 
-    #   - e.g., failover1 is not running on any server.
 
     # Recover the group
+    if ($running -eq 0)
+    {
+        $user = $clusters[$clusterid][$serverid][3]
+        $pass = $clusters[$clusterid][$serverid][4]
+        $uri = "http://" + $clusters[$clusterid][$serverid][1] + ":" + $clusters[$clusterid][$serverid][2] + "/api/v1/groups/" + $groups[$i] + "/start"
+        $body = [System.Text.Encoding]::UTF8.GetBytes("{ `"target`" : `"$hostname`" }")
+        Write-Output $user
+        Write-Debug $pass
+        Write-Output $uri
+        $base64AuthInfo = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(("{0}:{1}" -f $user,$pass)))
+        Invoke-RestMethod -Method Post -Headers @{Authorization=("Basic {0}" -f $base64AuthInfo)} -Uri $uri -Body $body
+        # FIXME
+        # - Need to add error handling
 
+        # Check the group status
+        $uri = "http://" + $clusters[$clusterid][$serverid][1] + ":" + $clusters[$clusterid][$serverid][2] + "/api/v1/groups/" + $groups[$i]
+        $ret = Invoke-RestMethod -Method Get -Headers @{Authorization=("Basic {0}" -f $base64AuthInfo)} -Uri $uri
+        Write-Output "$groups[$i] : $ret.groups.status"
+    }
 }
