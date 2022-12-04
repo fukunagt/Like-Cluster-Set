@@ -2,10 +2,8 @@
 # Recover-Group.ps1
 # - Check the group status.
 # - If the group is offline, the script starts it.
-#============================================================
-
-#============================================================
-# To Do
+#
+# TODO
 # - If there is a proxy server, need to add noproxy option.
 #============================================================
 
@@ -42,21 +40,21 @@ $clusters = @(
         @("server4", "192.168.1.4", "29009", "Administrator", "Passw0rd")
     )
 )
-
 #------------------------------------------------------------
 # groups
 # - Add failover group in the clusters.
+# - Set failover group name and priorities.
 # - The following sample has 2 groups.
 # - If you want to add one more group, write as below.
 #$groups = @(
-#    @("failover1"),
-#    @("failover2"),
-#    @("failover3")
+#    @("failover1", @("server1", "server2", "server3", "server4")),
+#    @("failover2", @("server2", "server1", "server4", "server3")),
+#    @("failover3", @("server3", "server4", "server1", "server2"))
 #)
 #------------------------------------------------------------
 $groups = @(
-    "failover1",
-    "failover2"
+    @("failover1", @("server1", "server2", "server3", "server4")),
+    @("failover2", @("server2", "server1", "server4", "server3"))
 )
 #============================================================
 
@@ -69,13 +67,10 @@ $hostname = hostname
 
 # Find my server in the clusters matrix.
 $clusterid = -1
-Write-Debug $clusters.Length
 for ($i = 0; $i -lt $clusters.Length; $i++)
 {
-    Write-Debug $clusters[$i].Length
     for ($j = 0; $j -lt $clusters[$i].Length; $j++)
     {
-        Write-Debug $clusters[$i][$j][0]
         if ($clusters[$i][$j][0] -eq $hostname)
         {
             $clusterid = $i
@@ -90,7 +85,6 @@ for ($i = 0; $i -lt $clusters.Length; $i++)
         break;
     }
 }
-Write-Debug $clusterid
 if ($clusterid -eq -1)
 {
     Write-Output "Cannot find the server in the cluster matrix."
@@ -99,29 +93,23 @@ if ($clusterid -eq -1)
 }
 
 # Check the group status and recover it.
-Write-Debug $groups.Length
 for ($i = 0; $i -lt $groups.Length; $i++)
 {
-    Write-Debug $groups[$i]
-
     # running
     # 0: Offline
     # 1: Online
     $running = 0
 
+    $group = $groups[$i][0]
+
     # Get the group status from my API server.
     $user = $clusters[$clusterid][$serverid][3]
     $pass = $clusters[$clusterid][$serverid][4]
-    $uri = "http://" + $clusters[$clusterid][$serverid][1] + ":" + $clusters[$clusterid][$serverid][2] + "/api/v1/groups/" + $groups[$i]
-    Write-Output $user
-    Write-Debug $pass
-    Write-Output $uri
+    $uri = "http://" + $clusters[$clusterid][$serverid][1] + ":" + $clusters[$clusterid][$serverid][2] + "/api/v1/groups/" + $group
     $base64AuthInfo = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(("{0}:{1}" -f $user,$pass)))
     $ret = Invoke-RestMethod -Method Get -Headers @{Authorization=("Basic {0}" -f $base64AuthInfo)} -Uri $uri
-    Write-Output $ret.groups.status
     if ($ret.groups.status -eq "Online")
     {
-        $group = $groups[$i]
         $current = $ret.groups.current
         Write-Output "$group is running on $current."
         $running = 1
@@ -142,53 +130,94 @@ for ($i = 0; $i -lt $groups.Length; $i++)
             {
                 for ($k = 0; $k -lt $clusters[$k].Length; $k++)
                 {
-                    Write-Output $clusters[$j][$k][0]
+                    $ipaddress = $clusters[$j][$k][1]
+                    $port = $clusters[$j][$k][2]
                     $user = $clusters[$j][$k][3]
                     $pass = $clusters[$j][$k][4]
-                    $uri = "http://" + $clusters[$j][$k][1] + ":" + $clusters[$j][$k][2] + "/api/v1/groups/" + $groups[$i]
-                    Write-Output $user
-                    Write-Debug $pass
-                    Write-Output $uri
+                    $uri = "http://" + $ipaddress + ":" + $port + "/api/v1/groups/" + $group
                     $base64AuthInfo = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(("{0}:{1}" -f $user,$pass)))
                     $ret = Invoke-RestMethod -Method Get -Headers @{Authorization=("Basic {0}" -f $base64AuthInfo)} -Uri $uri
-                    Write-Output $ret
-                    Write-Output $ret.groups.status
-                    if ($ret.groups.status -eq "Online")
+                    $status = $ret.groups.status
+                    if ($status -eq "Online" -or $status -eq "Online Pending" -or $status -eq "Offline Pending")
                     {
-                        $group = $groups[$i]
                         $current = $ret.groups.current
                         Write-Output "$group is running on $current."
                         $running = 1
                         break;
                     }
+                    if ($status -eq "Online Failure")
+                    {
+                        # FIXME
+                    }
                 }
-                # FIXME
-                # - Need to consider the other status (pending, failure)
             }        
         }
         # FIXME
         # - Need to add some log? 
         #   - e.g., failover1 is not running on any server.
+        Write-Output "$group is not running on any server."
     }
 
     # Recover the group
-    if ($running -eq 0)
+    # TODO: Consider priority
+    if ($running -eq 0) 
     {
-        $user = $clusters[$clusterid][$serverid][3]
-        $pass = $clusters[$clusterid][$serverid][4]
-        $uri = "http://" + $clusters[$clusterid][$serverid][1] + ":" + $clusters[$clusterid][$serverid][2] + "/api/v1/groups/" + $groups[$i] + "/start"
-        $body = [System.Text.Encoding]::UTF8.GetBytes("{ `"target`" : `"$hostname`" }")
-        Write-Output $user
-        Write-Debug $pass
-        Write-Output $uri
-        $base64AuthInfo = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(("{0}:{1}" -f $user,$pass)))
-        Invoke-RestMethod -Method Post -Headers @{Authorization=("Basic {0}" -f $base64AuthInfo)} -Uri $uri -Body $body
-        # FIXME
-        # - Need to add error handling
-
-        # Check the group status
-        $uri = "http://" + $clusters[$clusterid][$serverid][1] + ":" + $clusters[$clusterid][$serverid][2] + "/api/v1/groups/" + $groups[$i]
-        $ret = Invoke-RestMethod -Method Get -Headers @{Authorization=("Basic {0}" -f $base64AuthInfo)} -Uri $uri
-        Write-Output "$groups[$i] : $ret.groups.status"
+        for ($j = 0; $j -lt $groups[$i][1].Length; $j++)
+        {
+            $recover = 0
+            $found = 0
+            $server = $groups[$i][1][$j]
+            if ($server -eq $hostname)
+            {
+                # My server will start the group.
+                $recover = 1
+                break
+            }
+            for ($k = 0; $k -lt $clusters.Length; $k++)
+            {
+                for ($l = 0; $l -lt $clusters[$k].Length; $l++)
+                {
+                    if ($server -eq $clusters[$k][$l][0])
+                    {
+                        $ipaddress = $clusters[$k][$l][1]
+                        $port = $clusters[$k][$l][2]
+                        $user = $clusters[$clusterid][$serverid][3]
+                        $pass = $clusters[$clusterid][$serverid][4]
+                        $uri = "http://" + $ipaddress + ":" + $port + "/api/v1/servers/" + $server
+                        $base64AuthInfo = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(("{0}:{1}" -f $user,$pass)))
+                        $ret = Invoke-RestMethod -Method Get -Headers @{Authorization=("Basic {0}" -f $base64AuthInfo)} -Uri $uri
+                        $status = $ret.servers.status
+                        if ($status -eq "Online")
+                        {
+                            $found = 1
+                            break
+                        }
+                    }
+                }
+                if ($found -eq 1)
+                {
+                    Write-Output "$server is online and has higher priority."
+                    break
+                }
+            }
+            if ($found -eq 1)
+            {
+                # Found the server ($server) has hgiher priority.
+                break
+            }
+        }
+        if ($recover -eq 1)
+        {
+            Write-Output "$group starts on $hostname."
+            $ipaddress = $clusters[$clusterid][$serverid][1]
+            $port = $clusters[$clusterid][$serverid][2]
+            $user = $clusters[$clusterid][$serverid][3]
+            $pass = $clusters[$clusterid][$serverid][4]
+            $uri = "http://" + $ipaddress + ":" + $port + "/api/v1/groups/" + $group + "/start"
+            $body = [System.Text.Encoding]::UTF8.GetBytes("{ `"target`" : `"$hostname`" }")
+            $base64AuthInfo = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(("{0}:{1}" -f $user,$pass)))
+            $ret = Invoke-RestMethod -Method Post -Headers @{Authorization=("Basic {0}" -f $base64AuthInfo)} -Uri $uri -Body $body
+            # FIXME: Error handling
+        }
     }
 }
